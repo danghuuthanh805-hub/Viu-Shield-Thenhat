@@ -1,30 +1,20 @@
 package com.viu.shield
 
 object NativeGuard {
-    private var loaded = false
 
     init {
-        loaded = try {
-            System.loadLibrary("viu_guard")
-            true
-        } catch (e: UnsatisfiedLinkError) {
-            false
-        } catch (e: SecurityException) {
-            false
-        }
+        System.loadLibrary("viu")
     }
 
-    fun status(): String {
-        return if (loaded) {
-            try {
-                nativeStatus()
-            } catch (e: UnsatisfiedLinkError) {
-                "NATIVE_LIBRARY_ERROR"
-            }
-        } else {
-            "NATIVE_LIBRARY_MISSING"
-        }
-    }
+    external fun status(): String
 
-    private external fun nativeStatus(): String
+    external fun version(): String
+
+    external fun execute(
+        operation: Int,
+        a: Double,
+        b: Double
+    ): Double
+
+    external fun selfTest(): Boolean
 }
