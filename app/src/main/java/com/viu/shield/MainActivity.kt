@@ -1,769 +1,379 @@
 
 package com.viu.shield
 
-import android.os.Bundle
 import android.net.Uri
-import android.os.Build
-import android.content.ContentValues
-import android.content.Context
-import android.provider.OpenableColumns
-import android.provider.MediaStore
-import android.os.Environment
+import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.URI
-import java.net.URL
-import java.net.HttpURLConnection
-import java.security.MessageDigest
-import java.util.zip.ZipFile
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
-private val Bg = Color(0xFF090D18)
-private val Panel = Color(0xFF151D30)
-private val Cyan = Color(0xFF43D9FF)
-private val Purple = Color(0xFF9274FF)
-private val Green = Color(0xFF48E69A)
-private val Red = Color(0xFFFF5D75)
-
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent { ShieldApp() }
-    }
-}
-
-private fun getName(context: Context, uri: Uri): String {
-    return context.contentResolver.query(
-        uri, null, null, null, null
-    )?.use { cursor ->
-        val index = cursor.getColumnIndex(
-            OpenableColumns.DISPLAY_NAME
-        )
-        if (cursor.moveToFirst() && index >= 0) {
-            cursor.getString(index)
-        } else {
-            "selected.apk"
-        }
-    } ?: "selected.apk"
-}
-
-private fun copySelected(
-    context: Context,
-    uri: Uri
-): File {
-    val output = File(context.cacheDir, "selected.apk")
-
-    context.contentResolver.openInputStream(uri).use { input ->
-        requireNotNull(input) {
-            "Không thể đọc APK đã chọn"
-        }
-
-        output.outputStream().use { out ->
-            input.copyTo(out)
-        }
-    }
-
-    require(output.length() > 0) {
-        "APK được chọn đang trống"
-    }
-
-    return output
-}
-
-private fun readRawUrl(apk: File): String {
-    ZipFile(apk).use { zip ->
-        val entry = zip.getEntry("files.txt")
-            ?: error("Không tìm thấy files.txt ở thư mục gốc APK")
-
-        require(!entry.isDirectory) {
-            "files.txt không phải file hợp lệ"
-        }
-
-        val content = zip.getInputStream(entry)
-            .bufferedReader()
-            .use { it.readText().trim() }
-
-        val uri = URI(content)
-        val parts = uri.path.split("/")
-            .filter { it.isNotBlank() }
-
-        require(
-            uri.scheme == "https" &&
-            uri.host == "raw.githubusercontent.com" &&
-            parts.size >= 4 &&
-            uri.userInfo == null &&
-            uri.port == -1 &&
-            uri.query == null &&
-            uri.fragment == null
-        ) {
-            "Link GitHub Raw không hợp lệ"
-        }
-
-        return content
-    }
-}
-
-private fun sha256(file: File): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-
-    file.inputStream().use { input ->
-        val buffer = ByteArray(16384)
-
-        while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            digest.update(buffer, 0, count)
-        }
-    }
-
-    return digest.digest().joinToString("") {
-        "%02x".format(it)
-    }
-}
-
-private fun downloadApk(
-    context: Context,
-    rawUrl: String
-): File {
-    val connection = URL(rawUrl)
-        .openConnection() as HttpURLConnection
-
-    connection.connectTimeout = 20000
-    connection.readTimeout = 30000
-    connection.instanceFollowRedirects = true
-    connection.requestMethod = "GET"
-
-    try {
-        connection.connect()
-
-        require(connection.responseCode == 200) {
-            "Tải thất bại: HTTP ${connection.responseCode}"
-        }
-
-        val output = File(
-            context.cacheDir,
-            "reference_${System.currentTimeMillis()}.apk"
-        )
-
-        var total = 0L
-        val maxSize = 500L * 1024L * 1024L
-
-        connection.inputStream.use { input ->
-            output.outputStream().use { out ->
-                val buffer = ByteArray(16384)
-
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-
-                    total += count
-
-                    require(total <= maxSize) {
-                        "APK vượt quá giới hạn 500 MB"
-                    }
-
-                    out.write(buffer, 0, count)
-                }
-            }
-        }
-
-        require(output.length() > 0) {
-            "File tải về trống"
-        }
-
-        ZipFile(output).use { zip ->
-            require(zip.getEntry("AndroidManifest.xml") != null) {
-                "File tải về không phải APK hợp lệ"
-            }
-        }
-
-        return output
-    } finally {
-        connection.disconnect()
-    }
-}
-
-/*
- * Chỉ lấy các DEX ở thư mục gốc và thư viện native
- * trong lib/.
- */
-private fun isProtectedEntry(name: String): Boolean {
-    val isDex = Regex("""classes(\d*)\.dex""")
-        .matches(name)
-
-    val isNative = name.startsWith("lib/") &&
-        name.endsWith(".so")
-
-    return isDex || isNative
-}
-
-/*
- * Tính SHA-256 trực tiếp từ nội dung từng entry ZIP.
- */
-private fun hashZipEntry(
-    zip: ZipFile,
-    name: String
-): String {
-    val entry = zip.getEntry(name)
-        ?: error("Không tìm thấy $name")
-
-    val digest = MessageDigest.getInstance("SHA-256")
-
-    zip.getInputStream(entry).use { input ->
-        val buffer = ByteArray(8192)
-
-        while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            digest.update(buffer, 0, count)
-        }
-    }
-
-    return digest.digest().joinToString("") {
-        "%02x".format(it)
-    }
-}
-
-private data class IntegrityResult(
-    val status: String,
-    val details: String,
-    val checked: Int
+data class DexClass(
+    val dexFile: String,
+    val className: String
 )
 
-/*
- * So sánh từng DEX và .so giữa APK đang kiểm tra
- * với APK tham chiếu tải từ GitHub Raw.
- */
-private fun compareApks(
-    selected: File,
-    reference: File
-): IntegrityResult {
+class MainActivity : ComponentActivity() {
 
-    val originalHashes = mutableMapOf<String, String>()
-    val selectedHashes = mutableMapOf<String, String>()
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-    ZipFile(reference).use { zip ->
-        val entries = zip.entries()
+        setContent {
+            ViUShieldUI()
+        }
+    }
 
-        while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
+    private fun readUleb(data: ByteArray, start: Int): Pair<Int, Int> {
+        var result = 0
+        var shift = 0
+        var pos = start
 
-            if (!entry.isDirectory &&
-                isProtectedEntry(entry.name)
-            ) {
-                originalHashes[entry.name] =
-                    hashZipEntry(zip, entry.name)
+        while (pos < data.size) {
+            val b = data[pos++].toInt() and 0xFF
+            result = result or ((b and 0x7F) shl shift)
+
+            if ((b and 0x80) == 0) break
+            shift += 7
+            if (shift > 28) break
+        }
+
+        return Pair(result, pos)
+    }
+
+    private fun readDexClasses(data: ByteArray): List<String> {
+        if (data.size < 112) return emptyList()
+
+        if (data[0] != 'd'.code.toByte() ||
+            data[1] != 'e'.code.toByte() ||
+            data[2] != 'x'.code.toByte()
+        ) return emptyList()
+
+        val buffer = ByteBuffer.wrap(data)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        val stringCount = buffer.getInt(56)
+        val stringOffset = buffer.getInt(60)
+        val typeCount = buffer.getInt(64)
+        val typeOffset = buffer.getInt(68)
+
+        if (stringCount < 0 || typeCount < 0 ||
+            stringCount > 1000000 || typeCount > 1000000
+        ) return emptyList()
+
+        if (stringOffset < 0 || typeOffset < 0 ||
+            stringOffset.toLong() + stringCount.toLong() * 4 > data.size ||
+            typeOffset.toLong() + typeCount.toLong() * 4 > data.size
+        ) return emptyList()
+
+        val strings = ArrayList<String>(stringCount)
+
+        for (i in 0 until stringCount) {
+            val offset = buffer.getInt(stringOffset + i * 4)
+
+            if (offset < 0 || offset >= data.size) {
+                strings.add("")
+                continue
             }
-        }
-    }
 
-    ZipFile(selected).use { zip ->
-        val entries = zip.entries()
+            val (_, textStart) = readUleb(data, offset)
+            var end = textStart
 
-        while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
-
-            if (!entry.isDirectory &&
-                isProtectedEntry(entry.name)
-            ) {
-                selectedHashes[entry.name] =
-                    hashZipEntry(zip, entry.name)
+            while (end < data.size && data[end] != 0.toByte()) {
+                end++
             }
-        }
-    }
 
-    require(originalHashes.keys.any {
-        it.endsWith(".dex")
-    }) {
-        "APK chuẩn không có DEX"
-    }
-
-    val missing = originalHashes.keys - selectedHashes.keys
-    val added = selectedHashes.keys - originalHashes.keys
-
-    val changed = originalHashes.keys
-        .intersect(selectedHashes.keys)
-        .filter { name ->
-            originalHashes[name] != selectedHashes[name]
-        }
-
-    if (missing.isEmpty() &&
-        added.isEmpty() &&
-        changed.isEmpty()
-    ) {
-        return IntegrityResult(
-            status = "ORIGINAL",
-            details = "Không phát hiện thay đổi trong DEX và thư viện SO.",
-            checked = originalHashes.size
-        )
-    }
-
-    val details = buildString {
-        if (changed.isNotEmpty()) {
-            appendLine("FILE BỊ CHỈNH SỬA:")
-            changed.forEach { appendLine("• $it") }
-        }
-
-        if (missing.isNotEmpty()) {
-            appendLine("FILE BỊ THIẾU:")
-            missing.forEach { appendLine("• $it") }
-        }
-
-        if (added.isNotEmpty()) {
-            appendLine("FILE ĐƯỢC THÊM:")
-            added.forEach { appendLine("• $it") }
-        }
-    }
-
-    return IntegrityResult(
-        status = "MODIFIED",
-        details = details.trim(),
-        checked = originalHashes.size
-    )
-}
-
-private fun saveToDownloads(
-    context: Context,
-    source: File
-): String {
-    val name = "ViUShield_${System.currentTimeMillis()}.apk"
-
-    val values = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-        put(
-            MediaStore.MediaColumns.MIME_TYPE,
-            "application/vnd.android.package-archive"
-        )
-        put(
-            MediaStore.MediaColumns.RELATIVE_PATH,
-            Environment.DIRECTORY_DOWNLOADS + "/ViUShield"
-        )
-        put(MediaStore.MediaColumns.IS_PENDING, 1)
-    }
-
-    val resolver = context.contentResolver
-
-    val uri = resolver.insert(
-        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-        values
-    ) ?: error("Không tạo được file trong Downloads")
-
-    try {
-        resolver.openOutputStream(uri).use { output ->
-            requireNotNull(output)
-
-            source.inputStream().use { input ->
-                input.copyTo(output)
-            }
-        }
-
-        val done = ContentValues().apply {
-            put(MediaStore.MediaColumns.IS_PENDING, 0)
-        }
-
-        resolver.update(uri, done, null, null)
-
-        return "Đã lưu: Download/ViUShield/$name"
-    } catch (e: Exception) {
-        resolver.delete(uri, null, null)
-        throw e
-    }
-}
-
-@Composable
-fun ShieldApp() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    var fileName by remember {
-        mutableStateOf("Chưa chọn APK")
-    }
-
-    var hash by remember {
-        mutableStateOf("")
-    }
-
-    var rawUrl by remember {
-        mutableStateOf("")
-    }
-
-    var result by remember {
-        mutableStateOf("Đang chờ APK...")
-    }
-
-    var downloadResult by remember {
-        mutableStateOf("Chưa tải APK chuẩn")
-    }
-
-    var integrity by remember {
-        mutableStateOf("Chưa kiểm tra")
-    }
-
-    var integrityDetails by remember {
-        mutableStateOf("Chưa có dữ liệu")
-    }
-
-    var nativeStatus by remember {
-        mutableStateOf("Chưa kiểm tra")
-    }
-
-    var busy by remember {
-        mutableStateOf(false)
-    }
-
-    var selectedFile by remember {
-        mutableStateOf<File?>(null)
-    }
-
-    var pendingSave by remember {
-        mutableStateOf<File?>(null)
-    }
-
-    val savePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(
-            "application/vnd.android.package-archive"
-        )
-    ) { uri ->
-        val file = pendingSave
-
-        if (uri != null && file != null) {
-            scope.launch {
-                busy = true
-
-                try {
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver
-                            .openOutputStream(uri).use { output ->
-                                requireNotNull(output)
-
-                                file.inputStream().use {
-                                    it.copyTo(output)
-                                }
-                            }
-                    }
-
-                    downloadResult = "Đã lưu APK thành công"
-                } catch (e: Exception) {
-                    downloadResult = "Lỗi lưu: ${e.message}"
-                } finally {
-                    busy = false
-                    pendingSave = null
-                }
-            }
-        } else {
-            pendingSave = null
-        }
-    }
-
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                busy = true
-
-                try {
-                    val name = getName(context, uri)
-
-                    val file = withContext(Dispatchers.IO) {
-                        copySelected(context, uri)
-                    }
-
-                    val url = withContext(Dispatchers.IO) {
-                        readRawUrl(file)
-                    }
-
-                    val digest = withContext(Dispatchers.IO) {
-                        sha256(file)
-                    }
-
-                    selectedFile = file
-                    fileName = name
-                    rawUrl = url
-                    hash = digest
-
-                    result = "FILES.TXT HỢP LỆ"
-                    integrity = "Sẵn sàng kiểm tra"
-                    integrityDetails =
-                        "Chọn Download Reference APK để bắt đầu."
-
-                    downloadResult = "Sẵn sàng tải APK chuẩn"
-
-                } catch (e: Exception) {
-                    selectedFile = null
-                    rawUrl = ""
-                    hash = ""
-
-                    result = "LỖI: ${e.message}"
-                    integrity = "Không thể kiểm tra"
-                    integrityDetails = "APK chưa hợp lệ"
-                } finally {
-                    busy = false
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        nativeStatus = try {
-            NativeGuard.status()
-        } catch (e: Throwable) {
-            "NATIVE ERROR: ${e.javaClass.simpleName}"
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF111B35), Bg, Bg)
-                )
+            strings.add(
+                if (end <= data.size)
+                    String(data, textStart, end - textStart, Charsets.UTF_8)
+                else ""
             )
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(15.dp)
-    ) {
+        }
 
-        Text(
-            "VIU SHIELD",
-            color = Cyan,
-            fontSize = 30.sp
-        )
+        val classes = mutableListOf<String>()
 
-        Text(
-            "ANDROID APK INTEGRITY SYSTEM",
-            color = Color.LightGray,
-            fontSize = 11.sp
-        )
+        for (i in 0 until typeCount) {
+            val index = buffer.getInt(typeOffset + i * 4)
 
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = Panel
-            ),
-            shape = RoundedCornerShape(22.dp)
+            if (index !in strings.indices) continue
+
+            val descriptor = strings[index]
+
+            if (descriptor.startsWith("L") && descriptor.endsWith(";")) {
+                classes.add(
+                    descriptor
+                        .removePrefix("L")
+                        .removeSuffix(";")
+                        .replace('/', '.')
+                )
+            }
+        }
+
+        return classes.distinct().sorted()
+    }
+
+    private suspend fun inspectApk(uri: Uri): List<DexClass> =
+        withContext(Dispatchers.IO) {
+            val result = mutableListOf<DexClass>()
+
+            contentResolver.openInputStream(uri)?.use { input ->
+                ZipInputStream(input).use { zip ->
+                    while (true) {
+                        val entry = zip.nextEntry ?: break
+
+                        if (!entry.isDirectory &&
+                            Regex("""classes(\d*)\.dex""")
+                                .matches(entry.name)
+                        ) {
+                            val output = ByteArrayOutputStream()
+                            val buffer = ByteArray(8192)
+                            var total = 0
+
+                            while (true) {
+                                val count = zip.read(buffer)
+                                if (count == -1) break
+
+                                total += count
+                                if (total > 100 * 1024 * 1024) {
+                                    throw Exception("DEX file is too large")
+                                }
+
+                                output.write(buffer, 0, count)
+                            }
+
+                            val classes = readDexClasses(output.toByteArray())
+
+                            classes.forEach { className ->
+                                result.add(
+                                    DexClass(entry.name, className)
+                                )
+                            }
+                        }
+
+                        zip.closeEntry()
+                    }
+                }
+            }
+
+            result.sortedWith(
+                compareBy<DexClass> { it.dexFile }
+                    .thenBy { it.className }
+            )
+        }
+
+    @Composable
+    private fun ViUShieldUI() {
+        var selectedName by remember { mutableStateOf("No APK selected") }
+        var search by remember { mutableStateOf("") }
+        var classes by remember { mutableStateOf<List<DexClass>>(emptyList()) }
+        var loading by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf("") }
+        var nativeStatus by remember {
+            mutableStateOf("Checking native engine...")
+        }
+
+        val scope = rememberCoroutineScope()
+
+        val picker = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            if (uri != null) {
+                selectedName = uri.lastPathSegment ?: "Selected APK"
+                loading = true
+                error = ""
+                classes = emptyList()
+
+                scope.launch {
+                    try {
+                        classes = inspectApk(uri)
+                        if (classes.isEmpty()) {
+                            error = "No readable classes found."
+                        }
+                    } catch (e: Exception) {
+                        error = e.message ?: "APK inspection failed."
+                    } finally {
+                        loading = false
+                    }
+                }
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            nativeStatus = try {
+                NativeGuard.status()
+            } catch (e: Throwable) {
+                "Native library unavailable"
+            }
+        }
+
+        val filtered = classes.filter {
+            it.className.contains(search, ignoreCase = true) ||
+            it.dexFile.contains(search, ignoreCase = true)
+        }
+
+        val groups = filtered.groupBy { it.dexFile }.toSortedMap()
+
+        MaterialTheme(
+            colorScheme = darkColorScheme(
+                primary = Color(0xFF8B80FF),
+                background = Color(0xFF0B0D14),
+                surface = Color(0xFF171A25)
+            )
         ) {
-            Column(Modifier.padding(18.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0B0D14))
+                    .padding(18.dp)
+            ) {
+                Text(
+                    "ViU Shield",
+                    color = Color.White,
+                    fontSize = 28.sp
+                )
 
                 Text(
-                    "Protection Center",
-                    color = Color.White,
-                    fontSize = 22.sp
+                    "APK Protection & Inspector",
+                    color = Color(0xFF9298AC),
+                    fontSize = 13.sp
                 )
+
+                Spacer(Modifier.height(20.dp))
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF171A25)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("NATIVE ENGINE", color = Color(0xFF9298AC))
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            nativeStatus,
+                            color = Color(0xFF8B80FF),
+                            fontSize = 16.sp
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(14.dp))
 
-                Text("SELECTED APK", color = Cyan)
-                Text(fileName, color = Color.White)
-
-                Spacer(Modifier.height(15.dp))
-
                 Button(
-                    enabled = !busy,
                     onClick = {
-                        picker.launch(
-                            arrayOf(
-                                "application/vnd.android.package-archive",
-                                "application/octet-stream"
-                            )
-                        )
+                        picker.launch(arrayOf("application/vnd.android.package-archive"))
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Purple
-                    )
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("＋ Select APK")
+                    Text("Select APK")
                 }
-            }
-        }
 
-        InfoCard("FILES.TXT CHECK", result)
+                Text(
+                    selectedName,
+                    color = Color.LightGray,
+                    fontSize = 12.sp
+                )
 
-        InfoCard(
-            "NATIVE ENGINE",
-            nativeStatus
-        )
+                Spacer(Modifier.height(16.dp))
 
-        InfoCard(
-            "SELECTED APK SHA-256",
-            hash.ifEmpty { "Chưa có dữ liệu" }
-        )
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Search classes or DEX files") },
+                    singleLine = true
+                )
 
-        InfoCard(
-            "GITHUB RAW",
-            rawUrl.ifEmpty { "Chưa có link" }
-        )
+                Spacer(Modifier.height(12.dp))
 
-        Button(
-            enabled = selectedFile != null &&
-                rawUrl.isNotEmpty() &&
-                !busy,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("CLASS EXPLORER", color = Color.White)
+                    Text(
+                        "${filtered.size} classes",
+                        color = Color(0xFF8B80FF)
+                    )
+                }
 
-            onClick = {
-                val selected = selectedFile ?: return@Button
+                Spacer(Modifier.height(8.dp))
 
-                scope.launch {
-                    busy = true
+                if (loading) {
+                    CircularProgressIndicator()
+                }
 
-                    downloadResult = "Đang tải APK chuẩn..."
-                    integrity = "ĐANG KIỂM TRA"
-                    integrityDetails = "Đang so sánh DEX và thư viện SO..."
+                if (error.isNotEmpty()) {
+                    Text(error, color = Color(0xFFFF7777))
+                }
 
-                    try {
-                        val downloaded = withContext(Dispatchers.IO) {
-                            downloadApk(context, rawUrl)
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    groups.forEach { (dexName, entries) ->
+                        item(key = "header_$dexName") {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color(0xFF24283A)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    Modifier.padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(dexName, color = Color(0xFFB7AEFF))
+                                    Text(
+                                        "${entries.size} classes",
+                                        color = Color.LightGray
+                                    )
+                                }
+                            }
                         }
 
-                        val downloadedHash =
-                            withContext(Dispatchers.IO) {
-                                sha256(downloaded)
+                        items(entries, key = { "${it.dexFile}:${it.className}" }) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color(0xFF171A25)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    it.className,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(12.dp)
+                                )
                             }
-
-                        val comparison =
-                            withContext(Dispatchers.IO) {
-                                compareApks(selected, downloaded)
-                            }
-
-                        integrity = comparison.status
-
-                        integrityDetails =
-                            comparison.details +
-                            "\n\nSố file chuẩn đã kiểm tra: ${comparison.checked}"
-
-                        if (comparison.status == "ORIGINAL") {
-                            integrity = "ORIGINAL"
-                        } else {
-                            integrity = "MODIFIED"
                         }
-
-                        val message = if (
-                            Build.VERSION.SDK_INT >= 29
-                        ) {
-                            withContext(Dispatchers.IO) {
-                                saveToDownloads(context, downloaded)
-                            }
-                        } else {
-                            pendingSave = downloaded
-                            savePicker.launch(downloaded.name)
-                            "Chọn thư mục Download để lưu APK"
-                        }
-
-                        downloadResult =
-                            "$message\nSHA-256 APK chuẩn: $downloadedHash"
-
-                    } catch (e: Exception) {
-                        integrity = "CHECK FAILED"
-                        integrityDetails = e.message
-                            ?: "Lỗi không xác định"
-
-                        downloadResult =
-                            "THẤT BẠI: ${e.message}"
-
-                    } finally {
-                        busy = false
                     }
                 }
-            },
 
-            modifier = Modifier.fillMaxWidth(),
-
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Cyan,
-                contentColor = Color.Black
-            )
-        ) {
-            Text("↓  DOWNLOAD & VERIFY APK")
-        }
-
-        InfoCard(
-            "INTEGRITY STATUS",
-            integrity
-        )
-
-        InfoCard(
-            "INTEGRITY DETAILS",
-            integrityDetails
-        )
-
-        InfoCard(
-            "DOWNLOAD RESULT",
-            downloadResult
-        )
-
-        if (busy) {
-            CircularProgressIndicator(
-                color = Cyan,
-                modifier = Modifier.align(
-                    Alignment.CenterHorizontally
+                Text(
+                    "ViU Shield • Native Engine",
+                    color = Color.Gray,
+                    fontSize = 11.sp
                 )
-            )
-
-            Text(
-                "Đang xử lý...",
-                color = Color.White,
-                modifier = Modifier.align(
-                    Alignment.CenterHorizontally
-                )
-            )
-        }
-
-        Text(
-            "ViU Shield 1.0 • The Nhat",
-            color = Color.Gray,
-            fontSize = 11.sp,
-            modifier = Modifier.align(
-                Alignment.CenterHorizontally
-            )
-        )
-    }
-}
-
-@Composable
-fun InfoCard(
-    title: String,
-    value: String
-) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Panel
-        ),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(Modifier.padding(16.dp)) {
-
-            Text(
-                title,
-                color = Cyan,
-                fontSize = 12.sp
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                value,
-                color = Color.White,
-                fontSize = 13.sp
-            )
+            }
         }
     }
 }
