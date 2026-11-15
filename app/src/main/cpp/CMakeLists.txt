@@ -1,20 +1,16 @@
-
 cmake_minimum_required(VERSION 3.22.1)
 
-project("viu_guard")
+project(viu)
 
 add_library(
-    viu_guard
+    viu
     SHARED
     native-lib.cpp
 )
 
-find_library(
-    log-lib
-    log
-)
+find_library(log-lib log)
 
 target_link_libraries(
-    viu_guard
+    viu
     ${log-lib}
 )
