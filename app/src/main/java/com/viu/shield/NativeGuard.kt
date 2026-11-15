@@ -1,3 +1,4 @@
+
 package com.viu.shield
 
 object NativeGuard {
@@ -10,11 +11,11 @@ object NativeGuard {
 
     external fun version(): String
 
+    external fun selfTest(): Boolean
+
     external fun execute(
         operation: Int,
         a: Double,
         b: Double
     ): Double
-
-    external fun selfTest(): Boolean
 }
