@@ -1,17 +1,27 @@
-<application
-    android:name=".ViuApplication"
-    android:allowBackup="false"
-    android:label="ViU Shield"
-    android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
-    <activity
-        android:name=".MainActivity"
-        android:exported="true">
+<?xml version="1.0" encoding="utf-8"?>
 
-        <intent-filter>
-            <action android:name="android.intent.action.MAIN"/>
-            <category android:name="android.intent.category.LAUNCHER"/>
-        </intent-filter>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    </activity>
-</application>
+    <application
+        android:name=".ViuApplication"
+        android:allowBackup="false"
+        android:label="ViU Shield"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+    </application>
+
+</manifest>
