@@ -13,13 +13,20 @@ android {
         applicationId = "com.viu.shield"
         minSdk = 23
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.3.0"
+        versionCode = 2
+        versionName = "1.0.0"
 
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
             }
+        }
+
+        ndk {
+            abiFilters += listOf(
+                "arm64-v8a",
+                "armeabi-v7a"
+            )
         }
     }
 
@@ -34,6 +41,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     externalNativeBuild {
@@ -46,6 +54,27 @@ android {
         jniLibs {
             useLegacyPackaging = false
         }
+
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
+        }
+    }
+
+    androidResources {
+        noCompress += listOf(
+            "enc",
+            "vsig"
+        )
+    }
+
+    lint {
+        abortOnError = false
     }
 }
 
@@ -56,4 +85,10 @@ dependencies {
     implementation("androidx.compose.ui:ui:1.7.5")
     implementation("androidx.compose.ui:ui-tooling-preview:1.7.5")
     implementation("androidx.compose.material3:material3:1.3.1")
+
+    // ZIP và xử lý dữ liệu
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
+
+    // Kiểm tra và mã hóa dữ liệu
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 }
